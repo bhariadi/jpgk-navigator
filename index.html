@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Encrypted .JPGK Field Navigator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col select-none overflow-hidden font-sans">
+
+  <!-- Header Bar -->
+  <header class="bg-slate-800 border-b border-slate-700 p-3 flex items-center justify-between z-20 shadow-lg">
+    <div class="flex items-center gap-2">
+      <span class="text-xl">🔒</span>
+      <div>
+        <h1 class="font-bold text-emerald-400 text-xs sm:text-sm">Secure JPGK Navigator</h1>
+        <p id="gpsStatus" class="text-[10px] text-slate-400">GPS: Initializing...</p>
+      </div>
+    </div>
+
+    <label class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-2 rounded-lg cursor-pointer transition flex items-center gap-1">
+      <span>📂 Load Encrypted .JPGK</span>
+      <input type="file" id="fileInput" accept=".jpgk,.json" class="hidden" onchange="handleFileSelect(event)">
+    </label>
+  </header>
+
+  <!-- Main Display Area -->
+  <main class="relative flex-1 bg-black flex items-center justify-center overflow-auto p-2">
+    <canvas id="mapCanvas" class="max-w-full max-h-full object-contain shadow-2xl rounded hidden"></canvas>
+
+    <!-- Passcode & Status Modal -->
+    <div id="statusModal" class="bg-slate-800 border border-slate-700 p-6 rounded-2xl max-w-sm text-center shadow-2xl mx-4 z-30">
+      <div id="statusIcon" class="text-4xl mb-2">🗺️</div>
+      <h2 id="statusTitle" class="text-lg font-bold text-slate-200">Load Protected Map</h2>
+      <p id="statusBody" class="text-xs text-slate-400 mt-2 mb-4">
+        Select an encrypted .jpgk file to unlock field navigation.
+      </p>
+
+      <!-- Passcode Input Form (Hidden until valid file is selected) -->
+      <div id="passcodeContainer" class="hidden flex flex-col gap-3">
+        <input type="password" id="passcodeInput" placeholder="Enter Map Passcode" 
+               class="bg-slate-900 border border-slate-700 text-slate-100 text-sm rounded-lg p-2.5 text-center focus:outline-none focus:border-emerald-500"
+               onkeydown="if(event.key === 'Enter') attemptDecryption()">
+        <button onclick="attemptDecryption()" 
+                class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm py-2 px-4 rounded-lg transition">
+          Unlock & Decrypt Map
+        </button>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    let loadedContainerData = null;
+    let baseImage = null;
+    let currentGpsCoords = null;
+    let mapBbox = null;
+
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+    const gpsStatus = document.getElementById('gpsStatus');
+
+    // 1. Geolocation Engine
+    function startGpsTracking() {
+      if (window.location.protocol === 'file:') {
+        gpsStatus.innerText = "GPS Disabled: Opened via file:// (Host on HTTPS/Server for GPS)";
+        gpsStatus.className = "text-[10px] text-amber-400 font-mono font-bold";
+        return;
+      }
+
+      if (!('geolocation' in navigator)) {
+        gpsStatus.innerText = "GPS Error: Geolocation not supported.";
+        return;
+      }
+
+      navigator.geolocation.watchPosition(
+        (pos) => {
+          currentGpsCoords = { lon: pos.coords.longitude, lat: pos.coords.latitude };
+          gpsStatus.innerText = `GPS Fix: ${currentGpsCoords.lat.toFixed(5)}, ${currentGpsCoords.lon.toFixed(5)}`;
+          gpsStatus.className = "text-[10px] text-emerald-400 font-mono font-bold";
+          renderMapAndGps();
+        },
+        (err) => {
+          gpsStatus.innerText = `GPS Error: ${err.message}`;
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    }
+
+    window.addEventListener('DOMContentLoaded', startGpsTracking);
+
+    // 2. Select & Validate JSON Container
+    async function handleFileSelect(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        loadedContainerData = JSON.parse(text);
+
+        // Check format tag
+        if (loadedContainerData.format !== "JPGK_STD_V1") {
+          throw new Error("Invalid format. File is not a valid encrypted .jpgk package.");
+        }
+
+        // Check expiration
+        const currentEpoch = Math.floor(Date.now() / 1000);
+        if (currentEpoch > loadedContainerData.expiry_epoch) {
+          showModal('🔒', 'Map Access Expired', `Access blocked. This map expired on ${loadedContainerData.expiry_readable}.`, false);
+          return;
+        }
+
+        // Show passcode input
+        mapBbox = loadedContainerData.bbox;
+        showModal('🔑', 'Enter Passcode', 'This map is passcode-protected. Enter key to decrypt:', true);
+
+      } catch (err) {
+        showModal('⚠️', 'Invalid File', err.message, false);
+      }
+    }
+
+    // 3. Web Crypto SHA-256 Stream Decryption Engine
+    async function attemptDecryption() {
+      const passcode = document.getElementById('passcodeInput').value;
+      if (!passcode) return;
+
+      try {
+        const salt = Uint8Array.from(atob(loadedContainerData.salt), c => c.charCodeAt(0));
+        const ciphertext = Uint8Array.from(atob(loadedContainerData.ciphertext), c => c.charCodeAt(0));
+
+        // 3a. Derive 256-bit key using PBKDF2 matching Python's hashlib.pbkdf2_hmac
+        const enc = new TextEncoder();
+        const keyMaterial = await crypto.subtle.importKey(
+          "raw", enc.encode(passcode), "PBKDF2", false, ["deriveBits"]
+        );
+
+        const derivedBits = await crypto.subtle.deriveBits(
+          { name: "PBKDF2", salt: salt, iterations: 100000, hash: "SHA-256" },
+          keyMaterial,
+          256
+        );
+
+        const key = new Uint8Array(derivedBits);
+
+        // 3b. Generate matching SHA-256 keystream
+        const keystream = new Uint8Array(ciphertext.length);
+        let offset = 0;
+        let counter = 0;
+
+        while (offset < ciphertext.length) {
+          const blockInput = new Uint8Array(key.length + 4);
+          blockInput.set(key, 0);
+          
+          // Append 4-byte big-endian counter integer
+          const view = new DataView(blockInput.buffer);
+          view.setUint32(key.length, counter, false);
+
+          const blockHash = await crypto.subtle.digest("SHA-256", blockInput);
+          const blockBytes = new Uint8Array(blockHash);
+
+          const copyLength = Math.min(blockBytes.length, ciphertext.length - offset);
+          keystream.set(blockBytes.subarray(0, copyLength), offset);
+
+          offset += copyLength;
+          counter++;
+        }
+
+        // 3c. XOR ciphertext against keystream to recover image bytes
+        const decryptedBytes = new Uint8Array(ciphertext.length);
+        for (let i = 0; i < ciphertext.length; i++) {
+          decryptedBytes[i] = ciphertext[i] ^ keystream[i];
+        }
+
+        // 3d. Check JPEG Magic Bytes (0xFF 0xD8 0xFF) for key verification
+        if (decryptedBytes[0] !== 0xFF || decryptedBytes[1] !== 0xD8 || decryptedBytes[2] !== 0xFF) {
+          throw new Error("Invalid passcode");
+        }
+
+        // 3e. Render decrypted image blob to Canvas
+        const blob = new Blob([decryptedBytes], { type: 'image/jpeg' });
+        const imageUrl = URL.createObjectURL(blob);
+
+        baseImage = new Image();
+        baseImage.onload = () => {
+          canvas.width = baseImage.width;
+          canvas.height = baseImage.height;
+          canvas.classList.remove('hidden');
+          document.getElementById('statusModal').classList.add('hidden');
+          URL.revokeObjectURL(imageUrl);
+          renderMapAndGps();
+        };
+        baseImage.src = imageUrl;
+
+      } catch (err) {
+        alert("❌ Incorrect Passcode or corrupted payload!");
+      }
+    }
+
+    // UI Helper Function
+    function showModal(icon, title, body, showPasscode) {
+      canvas.classList.add('hidden');
+      document.getElementById('statusModal').classList.remove('hidden');
+      document.getElementById('statusIcon').innerText = icon;
+      document.getElementById('statusTitle').innerText = title;
+      document.getElementById('statusBody').innerText = body;
+      
+      const pContainer = document.getElementById('passcodeContainer');
+      if (showPasscode) {
+        pContainer.classList.remove('hidden');
+        document.getElementById('passcodeInput').value = '';
+        document.getElementById('passcodeInput').focus();
+      } else {
+        pContainer.classList.add('hidden');
+      }
+    }
+
+    // 4. Render Map & Live Affine GPS Dot
+    function renderMapAndGps() {
+      if (!baseImage || !canvas) return;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(baseImage, 0, 0);
+
+      if (!currentGpsCoords || !mapBbox) return;
+
+      const [minX, minY, maxX, maxY] = mapBbox;
+      const { lon, lat } = currentGpsCoords;
+
+      // Ensure user is within bounds
+      if (lon < minX || lon > maxX || lat < minY || lat > maxY) return;
+
+      const pixelX = canvas.width * ((lon - minX) / (maxX - minX));
+      const pixelY = canvas.height * (1 - ((lat - minY) / (maxY - minY)));
+
+      // Draw GPS Marker
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(pixelX, pixelY, 22, 0, 2 * Math.PI);
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.3)';
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(pixelX, pixelY, 10, 0, 2 * Math.PI);
+      ctx.fillStyle = '#2563eb';
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+      ctx.restore();
+    }
+  </script>
+</body>
+</html>
