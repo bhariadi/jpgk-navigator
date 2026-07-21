@@ -1,0 +1,146 @@
+<script>
+  const DELIMITER = "||JPGK_HEADER_START||";
+  let mapMetadata = null;
+  let baseImage = null;
+  let currentGpsCoords = null;
+
+  const canvas = document.getElementById('mapCanvas');
+  const ctx = canvas.getContext('2d');
+  const gpsStatus = document.getElementById('gpsStatus');
+
+  // 1. Enhanced Geolocation Engine with Explicit Permission Check
+  function startGpsTracking() {
+    // Check for Secure Context (HTTPS or localhost)
+    if (window.location.protocol === 'file:') {
+      gpsStatus.innerText = "GPS Error: Mobile browsers block GPS on file:// addresses. Host on HTTPS!";
+      gpsStatus.className = "text-[10px] text-red-400 font-mono font-bold";
+      alert("⚠️ GPS BLOCKED BY BROWSER\n\nAndroid requires HTTPS to use GPS.\n\nPlease host this index.html file on GitHub Pages or a web server, or run it on localhost.");
+      return;
+    }
+
+    if (!('geolocation' in navigator)) {
+      gpsStatus.innerText = "GPS Error: Geolocation not supported on this device.";
+      gpsStatus.className = "text-[10px] text-red-400 font-mono";
+      return;
+    }
+
+    gpsStatus.innerText = "GPS: Requesting Permission...";
+    gpsStatus.className = "text-[10px] text-amber-400 font-mono";
+
+    navigator.geolocation.watchPosition(
+      (pos) => {
+        currentGpsCoords = { lon: pos.coords.longitude, lat: pos.coords.latitude };
+        gpsStatus.innerText = `GPS Fix: ${currentGpsCoords.lat.toFixed(5)}, ${currentGpsCoords.lon.toFixed(5)}`;
+        gpsStatus.className = "text-[10px] text-emerald-400 font-mono font-bold";
+        renderMapAndGps();
+      },
+      (err) => {
+        let msg = err.message;
+        if (err.code === err.PERMISSION_DENIED) {
+          msg = "Permission Denied. Reset site permissions in Chrome settings.";
+        }
+        gpsStatus.innerText = `GPS Error: ${msg}`;
+        gpsStatus.className = "text-[10px] text-red-400 font-mono";
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  }
+
+  // Trigger GPS start on page load
+  window.addEventListener('DOMContentLoaded', startGpsTracking);
+
+  // 2. Load & Validate .JPGK File
+  async function loadJpgkFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const modal = document.getElementById('statusModal');
+    const icon = document.getElementById('statusIcon');
+    const title = document.getElementById('statusTitle');
+    const body = document.getElementById('statusBody');
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      const textDecoder = new TextDecoder('latin1');
+      const fileString = textDecoder.decode(bytes);
+
+      const delimiterIdx = fileString.indexOf(DELIMITER);
+      if (delimiterIdx === -1) throw new Error("Invalid .JPGK file structure.");
+
+      const payloadStr = fileString.substring(delimiterIdx + DELIMITER.length);
+      mapMetadata = JSON.parse(atob(payloadStr));
+
+      // ENFORCE HARD TIME LOCK
+      const currentEpoch = Math.floor(Date.now() / 1000);
+      if (currentEpoch > mapMetadata.expiry_epoch) {
+        canvas.classList.add('hidden');
+        modal.classList.remove('hidden');
+        icon.innerText = '🔒';
+        title.innerText = 'Layout Access Expired';
+        title.className = 'text-lg font-bold text-red-400';
+        body.innerText = `Access blocked. Map layout expired on ${mapMetadata.expiry_readable}.`;
+        return;
+      }
+
+      // Render pure JPEG stream
+      const imageBytes = bytes.subarray(0, delimiterIdx);
+      const blob = new Blob([imageBytes], { type: 'image/jpeg' });
+      const imageUrl = URL.createObjectURL(blob);
+
+      baseImage = new Image();
+      baseImage.onload = () => {
+        canvas.width = baseImage.width;
+        canvas.height = baseImage.height;
+        canvas.classList.remove('hidden');
+        modal.classList.add('hidden');
+        URL.revokeObjectURL(imageUrl);
+        renderMapAndGps();
+      };
+      baseImage.src = imageUrl;
+
+    } catch (err) {
+      canvas.classList.add('hidden');
+      modal.classList.remove('hidden');
+      icon.innerText = '⚠️';
+      title.innerText = 'File Error';
+      title.className = 'text-lg font-bold text-amber-400';
+      body.innerText = err.message;
+    }
+  }
+
+  // 3. Render Map & Live Affine GPS Location
+  function renderMapAndGps() {
+    if (!baseImage || !canvas) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(baseImage, 0, 0);
+
+    if (!currentGpsCoords || !mapMetadata || !mapMetadata.bbox) return;
+
+    const [minX, minY, maxX, maxY] = mapMetadata.bbox;
+    const { lon, lat } = currentGpsCoords;
+
+    if (lon < minX || lon > maxX || lat < minY || lat > maxY) return;
+
+    // Coordinate transformation
+    const pixelX = canvas.width * ((lon - minX) / (maxX - minX));
+    const pixelY = canvas.height * (1 - ((lat - minY) / (maxY - minY)));
+
+    // Render GPS Marker
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(pixelX, pixelY, 22, 0, 2 * Math.PI);
+    ctx.fillStyle = 'rgba(59, 130, 246, 0.3)';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(pixelX, pixelY, 10, 0, 2 * Math.PI);
+    ctx.fillStyle = '#2563eb';
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+    ctx.restore();
+  }
+</script>
