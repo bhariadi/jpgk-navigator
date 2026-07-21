@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>.JPGK Field Navigator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col select-none overflow-hidden font-sans">
+
+  <!-- Header -->
+  <header class="bg-slate-800 border-b border-slate-700 p-3 flex items-center justify-between z-20 shadow-lg">
+    <div class="flex items-center gap-2">
+      <span class="text-xl">📍</span>
+      <div>
+        <h1 class="font-bold text-emerald-400 text-xs sm:text-sm">JPGK Navigator</h1>
+        <p id="gpsStatus" class="text-[10px] text-slate-400">GPS: Initializing...</p>
+      </div>
+    </div>
+
+    <label class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-2 rounded-lg cursor-pointer transition flex items-center gap-1">
+      <span>📂 Load .JPGK</span>
+      <input type="file" id="fileInput" accept=".jpgk,.jpg,.jpeg" class="hidden" onchange="loadJpgkFile(event)">
+    </label>
+  </header>
+
+  <!-- Canvas Map Area -->
+  <main class="relative flex-1 bg-black flex items-center justify-center overflow-auto p-2">
+    <canvas id="mapCanvas" class="max-w-full max-h-full object-contain shadow-2xl rounded hidden"></canvas>
+
+    <!-- Status & Alert Overlay -->
+    <div id="statusModal" class="bg-slate-800 border border-slate-700 p-6 rounded-2xl max-w-sm text-center shadow-2xl mx-4 z-30">
+      <div id="statusIcon" class="text-4xl mb-2">🗺️</div>
+      <h2 id="statusTitle" class="text-lg font-bold text-slate-200">Load Map Layout</h2>
+      <p id="statusBody" class="text-xs text-slate-400 mt-2">
+        Select a .jpgk container file to parse spatial layout graphics and activate offline field tracking.
+      </p>
+    </div>
+  </main>
+
+  <script>
+    const DELIMITER = "||JPGK_HEADER_START||";
+    let mapMetadata = null;
+    let baseImage = null;
+    let currentGpsCoords = null;
+
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+    const gpsStatus = document.getElementById('gpsStatus');
+
+    // 1. Safe GPS Engine (Handles file:// without blanking the app)
+    function startGpsTracking() {
+      // Alert user if opened locally via file:// on mobile
+      if (window.location.protocol === 'file:') {
+        gpsStatus.innerText = "GPS Disabled: Opened via file:// (Requires HTTPS/Server)";
+        gpsStatus.className = "text-[10px] text-amber-400 font-mono font-bold";
+        return;
+      }
+
+      if (!('geolocation' in navigator)) {
+        gpsStatus.innerText = "GPS Error: Geolocation not supported.";
+        gpsStatus.className = "text-[10px] text-red-400 font-mono";
+        return;
+      }
+
+      gpsStatus.innerText = "GPS: Requesting Fix...";
+      gpsStatus.className = "text-[10px] text-amber-400 font-mono";
+
+      navigator.geolocation.watchPosition(
+        (pos) => {
+          currentGpsCoords = { lon: pos.coords.longitude, lat: pos.coords.latitude };
+          gpsStatus.innerText = `GPS Fix: ${currentGpsCoords.lat.toFixed(5)}, ${currentGpsCoords.lon.toFixed(5)}`;
+          gpsStatus.className = "text-[10px] text-emerald-400 font-mono font-bold";
+          renderMapAndGps();
+        },
+        (err) => {
+          gpsStatus.innerText = `GPS Error: ${err.message}`;
+          gpsStatus.className = "text-[10px] text-red-400 font-mono";
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    }
+
+    // Initialize GPS safely on page load
+    window.addEventListener('DOMContentLoaded', startGpsTracking);
+
+    // 2. Load & Parse .JPGK File
+    async function loadJpgkFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const modal = document.getElementById('statusModal');
+      const icon = document.getElementById('statusIcon');
+      const title = document.getElementById('statusTitle');
+      const body = document.getElementById('statusBody');
+
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        const textDecoder = new TextDecoder('latin1');
+        const fileString = textDecoder.decode(bytes);
+
+        const delimiterIdx = fileString.indexOf(DELIMITER);
+        if (delimiterIdx === -1) throw new Error("Invalid .JPGK file structure.");
+
+        const payloadStr = fileString.substring(delimiterIdx + DELIMITER.length);
+        mapMetadata = JSON.parse(atob(payloadStr));
+
+        // Enforce hard expiration check
+        const currentEpoch = Math.floor(Date.now() / 1000);
+        if (currentEpoch > mapMetadata.expiry_epoch) {
+          canvas.classList.add('hidden');
+          modal.classList.remove('hidden');
+          icon.innerText = '🔒';
+          title.innerText = 'Layout Access Expired';
+          title.className = 'text-lg font-bold text-red-400';
+          body.innerText = `Access blocked. Map layout expired on ${mapMetadata.expiry_readable}.`;
+          return;
+        }
+
+        // Render pure JPEG payload
+        const imageBytes = bytes.subarray(0, delimiterIdx);
+        const blob = new Blob([imageBytes], { type: 'image/jpeg' });
+        const imageUrl = URL.createObjectURL(blob);
+
+        baseImage = new Image();
+        baseImage.onload = () => {
+          canvas.width = baseImage.width;
+          canvas.height = baseImage.height;
+          canvas.classList.remove('hidden');
+          modal.classList.add('hidden');
+          URL.revokeObjectURL(imageUrl);
+          renderMapAndGps();
+        };
+        baseImage.src = imageUrl;
+
+      } catch (err) {
+        canvas.classList.add('hidden');
+        modal.classList.remove('hidden');
+        icon.innerText = '⚠️';
+        title.innerText = 'File Error';
+        title.className = 'text-lg font-bold text-amber-400';
+        body.innerText = err.message;
+      }
+    }
+
+    // 3. Coordinate Transformation & Render Engine
+    function renderMapAndGps() {
+      if (!baseImage || !canvas) return;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(baseImage, 0, 0);
+
+      if (!currentGpsCoords || !mapMetadata || !mapMetadata.bbox) return;
+
+      const [minX, minY, maxX, maxY] = mapMetadata.bbox;
+      const { lon, lat } = currentGpsCoords;
+
+      if (lon < minX || lon > maxX || lat < minY || lat > maxY) return;
+
+      const pixelX = canvas.width * ((lon - minX) / (maxX - minX));
+      const pixelY = canvas.height * (1 - ((lat - minY) / (maxY - minY)));
+
+      // Render GPS Blue Dot
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(pixelX, pixelY, 22, 0, 2 * Math.PI);
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.3)';
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(pixelX, pixelY, 10, 0, 2 * Math.PI);
+      ctx.fillStyle = '#2563eb';
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+      ctx.restore();
+    }
+  </script>
+</body>
+</html>
