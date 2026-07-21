@@ -23,7 +23,10 @@
       <button onclick="setMode('pan')" id="btnPan" class="px-2.5 py-1 text-xs rounded font-semibold bg-emerald-600 text-white whitespace-nowrap">✋ Pan</button>
       <button onclick="setMode('measure')" id="btnMeasure" class="px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800 whitespace-nowrap">📏 Measure</button>
       <button onclick="setMode('draw')" id="btnDraw" class="px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800 whitespace-nowrap">✏️ Draw</button>
+      <button onclick="setMode('pin')" id="btnPin" class="px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800 whitespace-nowrap">📍 Pin Point</button>
+      <button onclick="toggleTracking()" id="btnTrack" class="px-2.5 py-1 text-xs rounded font-semibold bg-blue-600 hover:bg-blue-500 text-white whitespace-nowrap">🛰️ Start Track</button>
       <button onclick="resetView()" class="px-2 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300 whitespace-nowrap">🎯 Reset</button>
+      <button onclick="openExportModal()" class="px-2 py-1 text-xs rounded bg-emerald-700 hover:bg-emerald-600 text-white whitespace-nowrap">💾 Export Data</button>
       <button onclick="clearGraphics()" class="px-2 py-1 text-xs rounded bg-red-900/40 hover:bg-red-800/60 text-red-300 border border-red-700 whitespace-nowrap">🗑️ Clear</button>
     </div>
 
@@ -37,7 +40,7 @@
   <main class="relative flex-1 bg-black flex items-center justify-center overflow-hidden p-0">
     <canvas id="mapCanvas" class="w-full h-full cursor-grab hidden touch-none"></canvas>
 
-    <!-- Context Floating Info Bar (For Measurement Output) -->
+    <!-- Context Floating Info Bar -->
     <div id="measureInfo" class="hidden absolute top-4 left-4 bg-slate-900/90 border border-slate-700 text-emerald-400 text-xs font-mono px-3 py-2 rounded-lg shadow-xl z-10">
       Length: 0.00 m
     </div>
@@ -60,6 +63,44 @@
         </button>
       </div>
     </div>
+
+    <!-- Pin Remark Modal -->
+    <div id="pinModal" class="hidden absolute bg-slate-800 border border-slate-700 p-6 rounded-2xl max-w-xs text-center shadow-2xl mx-4 z-30">
+      <h3 class="text-base font-bold text-slate-200 mb-2">Add Point Remark</h3>
+      <input type="text" id="pinRemarkInput" placeholder="Enter remark/notes..." 
+             class="bg-slate-900 border border-slate-700 text-slate-100 text-sm rounded-lg p-2.5 text-center w-full mb-4 focus:outline-none focus:border-emerald-500"
+             onkeydown="if(event.key === 'Enter') confirmPin()">
+      <div class="flex gap-2 justify-center">
+        <button onclick="confirmPin()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-4 rounded-lg transition">Save Pin</button>
+        <button onclick="closePinModal()" class="bg-slate-700 hover:bg-slate-600 text-white text-xs py-2 px-4 rounded-lg transition">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Export Dialog Modal -->
+    <div id="exportModal" class="hidden absolute bg-slate-800 border border-slate-700 p-6 rounded-2xl max-w-sm text-center shadow-2xl mx-4 z-30">
+      <h3 class="text-base font-bold text-slate-200 mb-2">💾 Export Field Data</h3>
+      <p class="text-xs text-slate-400 mb-4">Choose your preferred structural format configuration:</p>
+      
+      <div class="flex flex-col gap-2.5 mb-5 text-left text-xs">
+        <label class="flex items-center gap-2 cursor-pointer bg-slate-900 p-2.5 rounded-lg border border-slate-700">
+          <input type="radio" name="exportFormat" value="geojson" checked class="accent-emerald-500">
+          <div><strong class="text-emerald-400">GeoJSON</strong> <span class="text-slate-400 block">(.geojson) Standard spatial format</span></div>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer bg-slate-900 p-2.5 rounded-lg border border-slate-700">
+          <input type="radio" name="exportFormat" value="kml" class="accent-emerald-500">
+          <div><strong class="text-emerald-400">KML</strong> <span class="text-slate-400 block">(.kml) Google Earth & GIS compatible</span></div>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer bg-slate-900 p-2.5 rounded-lg border border-slate-700">
+          <input type="radio" name="exportFormat" value="csv" class="accent-emerald-500">
+          <div><strong class="text-emerald-400">CSV</strong> <span class="text-slate-400 block">(.csv) Tabular spreadsheet format</span></div>
+        </label>
+      </div>
+
+      <div class="flex gap-2 justify-center">
+        <button onclick="executeExport()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-4 rounded-lg transition">Save to Directory</button>
+        <button onclick="closeExportModal()" class="bg-slate-700 hover:bg-slate-600 text-white text-xs py-2 px-4 rounded-lg transition">Cancel</button>
+      </div>
+    </div>
   </main>
 
   <script>
@@ -68,28 +109,31 @@
     let currentGpsCoords = null;
     let mapBbox = null;
 
-    // Viewport Transformation State (Pan/Zoom)
     let scale = 1;
     let panX = 0;
     let panY = 0;
     let isDragging = false;
     let dragStart = { x: 0, y: 0 };
 
-    // Mobile Pinch-to-Zoom Tracking
     let initialPinchDistance = null;
     let initialScale = 1;
 
-    // Interaction Tools
-    let activeMode = 'pan'; // 'pan', 'measure', 'draw'
+    let activeMode = 'pan'; // 'pan', 'measure', 'draw', 'pin'
     let measurePoints = [];
     let drawnShapes = [];
     let currentShape = [];
+    
+    // Field Data Capture Layers
+    let pins = []; // Array of {x, y, lon, lat, remark, timestamp}
+    let trackLogs = []; // Array of {lon, lat, timestamp}
+    let isTracking = false;
+    let trackingInterval = null;
+    let pendingPinCoords = null;
 
     const canvas = document.getElementById('mapCanvas');
     const ctx = canvas.getContext('2d');
     const gpsStatus = document.getElementById('gpsStatus');
 
-    // Resize Canvas dynamically
     function resizeCanvas() {
       if (!canvas) return;
       canvas.width = canvas.parentElement.clientWidth;
@@ -98,7 +142,6 @@
     }
     window.addEventListener('resize', resizeCanvas);
 
-    // 1. Geolocation Engine
     function startGpsTracking() {
       if (window.location.protocol === 'file:') {
         gpsStatus.innerText = "GPS Disabled: Opened via file://";
@@ -116,6 +159,10 @@
           currentGpsCoords = { lon: pos.coords.longitude, lat: pos.coords.latitude };
           gpsStatus.innerText = `GPS Fix: ${currentGpsCoords.lat.toFixed(5)}, ${currentGpsCoords.lon.toFixed(5)}`;
           gpsStatus.className = "text-[10px] text-emerald-400 font-mono font-bold";
+          
+          if (isTracking && currentGpsCoords) {
+            trackLogs.push({ lon: currentGpsCoords.lon, lat: currentGpsCoords.lat, timestamp: new Date().toISOString() });
+          }
           renderMapAndGps();
         },
         (err) => {
@@ -126,7 +173,6 @@
     }
     window.addEventListener('DOMContentLoaded', startGpsTracking);
 
-    // 2. Select & Validate JSON Container
     async function handleFileSelect(event) {
       const file = event.target.files[0];
       if (!file) return;
@@ -153,7 +199,6 @@
       }
     }
 
-    // 3. Web Crypto SHA-256 Stream Decryption Engine
     async function attemptDecryption() {
       const passcode = document.getElementById('passcodeInput').value;
       if (!passcode) return;
@@ -222,8 +267,6 @@
       }
     }
 
-    // --- ZOOM, PAN, AND INTERACTION ENGINE ---
-
     function resetView() {
       if (!baseImage) return;
       scale = Math.min(canvas.width / baseImage.width, canvas.height / baseImage.height);
@@ -235,13 +278,15 @@
     function setMode(mode) {
       activeMode = mode;
       document.querySelectorAll('#toolBar button').forEach(b => {
-        if (b.id.startsWith('btn')) {
+        if (b.id.startsWith('btn') && b.id !== 'btnTrack') {
           b.className = 'px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800 whitespace-nowrap';
         }
       });
 
-      const activeBtn = mode === 'pan' ? 'btnPan' : mode === 'measure' ? 'btnMeasure' : 'btnDraw';
-      document.getElementById(activeBtn).className = 'px-2.5 py-1 text-xs rounded font-semibold bg-emerald-600 text-white whitespace-nowrap';
+      if (mode !== 'track') {
+        const activeBtn = mode === 'pan' ? 'btnPan' : mode === 'measure' ? 'btnMeasure' : mode === 'draw' ? 'btnDraw' : 'btnPin';
+        document.getElementById(activeBtn).className = 'px-2.5 py-1 text-xs rounded font-semibold bg-emerald-600 text-white whitespace-nowrap';
+      }
 
       canvas.style.cursor = mode === 'pan' ? 'grab' : 'crosshair';
 
@@ -258,12 +303,214 @@
       renderMapAndGps();
     }
 
+    // --- TRACKING ENGINE ---
+    function toggleTracking() {
+      isTracking = !isTracking;
+      const btn = document.getElementById('btnTrack');
+      if (isTracking) {
+        btn.className = 'px-2.5 py-1 text-xs rounded font-semibold bg-red-600 hover:bg-red-500 text-white whitespace-nowrap animate-pulse';
+        btn.innerText = '🛰️ Stop Track';
+        if (currentGpsCoords) {
+          trackLogs.push({ lon: currentGpsCoords.lon, lat: currentGpsCoords.lat, timestamp: new Date().toISOString() });
+        }
+      } else {
+        btn.className = 'px-2.5 py-1 text-xs rounded font-semibold bg-blue-600 hover:bg-blue-500 text-white whitespace-nowrap';
+        btn.innerText = '🛰️ Start Track';
+      }
+    }
+
+    // --- PIN POINT ENGINE ---
+    function openPinModal(imgPt) {
+      pendingPinCoords = imgPt;
+      document.getElementById('pinRemarkInput').value = '';
+      document.getElementById('pinModal').classList.remove('hidden');
+      document.getElementById('pinRemarkInput').focus();
+    }
+
+    function closePinModal() {
+      document.getElementById('pinModal').classList.add('hidden');
+      pendingPinCoords = null;
+    }
+
+    function confirmPin() {
+      const remark = document.getElementById('pinRemarkInput').value.trim() || 'Unnamed Pin';
+      if (pendingPinCoords) {
+        const geo = imageToGeoCoords(pendingPinCoords.x, pendingPinCoords.y);
+        pins.push({
+          x: pendingPinCoords.x,
+          y: pendingPinCoords.y,
+          lon: geo.lon,
+          lat: geo.lat,
+          remark: remark,
+          timestamp: new Date().toISOString()
+        });
+      }
+      closePinModal();
+      renderMapAndGps();
+    }
+
     function clearGraphics() {
       measurePoints = [];
       drawnShapes = [];
       currentShape = [];
+      pins = [];
+      trackLogs = [];
+      isTracking = false;
+      document.getElementById('btnTrack').className = 'px-2.5 py-1 text-xs rounded font-semibold bg-blue-600 hover:bg-blue-500 text-white whitespace-nowrap';
+      document.getElementById('btnTrack').innerText = '🛰️ Start Track';
       document.getElementById('measureInfo').innerText = "Length: 0.00 m";
       renderMapAndGps();
+    }
+
+    // --- EXPORT & DIRECTORY SAVE SYSTEM ---
+    function openExportModal() {
+      if (pins.length === 0 && trackLogs.length === 0 && drawnShapes.length === 0) {
+        alert("⚠️ No field data recorded to export yet (pins, tracks, or drawings).");
+        return;
+      }
+      document.getElementById('exportModal').classList.remove('hidden');
+    }
+
+    function closeExportModal() {
+      document.getElementById('exportModal').classList.add('hidden');
+    }
+
+    async function executeExport() {
+      const format = document.querySelector('input[name="exportFormat"]:checked').value;
+      let fileContent = "";
+      let mimeType = "";
+      let extension = "";
+
+      const timestampTag = new Date().toISOString().replace(/[:.]/g, '-');
+
+      if (format === 'geojson') {
+        extension = 'geojson';
+        mimeType = 'application/json';
+        
+        const features = [];
+        
+        // Add Pins
+        pins.forEach(p => {
+          features.push({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [p.lon, p.lat] },
+            properties: { type: "pin", remark: p.remark, time: p.timestamp }
+          });
+        });
+
+        // Add Tracks
+        if (trackLogs.length > 0) {
+          features.push({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: trackLogs.map(t => [t.lon, t.lat]) },
+            properties: { type: "track", count: trackLogs.length }
+          });
+        }
+
+        // Add Drawn Shapes
+        drawnShapes.forEach(shape => {
+          const coords = shape.map(pt => {
+            const geo = imageToGeoCoords(pt.x, pt.y);
+            return [geo.lon, geo.lat];
+          });
+          features.push({
+            type: "Feature",
+            geometry: { type: "Polygon", coordinates: [coords] },
+            properties: { type: "drawn_shape" }
+          });
+        });
+
+        const geojsonObj = { type: "FeatureCollection", features: features };
+        fileContent = JSON.stringify(geojsonObj, null, 2);
+
+      } else if (format === 'kml') {
+        extension = 'kml';
+        mimeType = 'application/vnd.google-earth.kml+xml';
+
+        let placemarks = '';
+        pins.forEach(p => {
+          placemarks += `
+    <Placemark>
+      <name>${escapeXml(p.remark)}</name>
+      <description>Captured via JPGK Navigator at ${p.timestamp}</description>
+      <Point><coordinates>${p.lon},${p.lat},0</coordinates></Point>
+    </Placemark>`;
+        });
+
+        if (trackLogs.length > 0) {
+          const coordsStr = trackLogs.map(t => `${t.lon},${t.lat},0`).join(' ');
+          placemarks += `
+    <Placemark>
+      <name>Field Track Log</name>
+      <LineString><coordinates>${coordsStr}</coordinates></LineString>
+    </Placemark>`;
+        }
+
+        fileContent = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>JPGK Field Export - ${timestampTag}</name>
+    ${placemarks}
+  </Document>
+</kml>`;
+
+      } else if (format === 'csv') {
+        extension = 'csv';
+        mimeType = 'text/csv';
+
+        let csvRows = ['Type,Longitude,Latitude,Remark,Timestamp'];
+        pins.forEach(p => {
+          csvRows.push(`Pin,${p.lon},${p.lat},"${escapeCsv(p.remark)}","${p.timestamp}"`);
+        });
+        trackLogs.forEach(t => {
+          csvRows.push(`TrackPoint,${t.lon},${t.lat},"GPS Track Log","${t.timestamp}"`);
+        });
+        fileContent = csvRows.join('\n');
+      }
+
+      closeExportModal();
+
+      // Advanced Directory / File Save Selector Handler
+      const filename = `field_data_${timestampTag}.${extension}`;
+      
+      if ('showSaveFilePicker' in window) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: filename,
+            types: [{
+              description: `${extension.toUpperCase()} Document`,
+              accept: { [mimeType]: [`.${extension}`] }
+            }]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(fileContent);
+          await writable.close();
+          alert("✅ File saved successfully into selected directory!");
+          return;
+        } catch (err) {
+          if (err.name === 'AbortError') return; // User cancelled
+          // Fallback to standard download if permission or context restricts handle
+        }
+      }
+
+      // Standard Fallback Direct Download Link
+      const blob = new Blob([fileContent], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function escapeXml(str) {
+      return str.replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','\'':'&apos;','"':'&quot;'}[c]));
+    }
+
+    function escapeCsv(str) {
+      return str.replace(/"/g, '""');
     }
 
     function screenToImageCoords(screenX, screenY) {
@@ -295,7 +542,6 @@
       return R * c;
     }
 
-    // Helper for Touch Pinch Calculations
     function getPinchDistance(e) {
       return Math.hypot(
         e.touches[0].clientX - e.touches[1].clientX,
@@ -318,6 +564,8 @@
       } else if (activeMode === 'draw') {
         currentShape.push(imgPt);
         renderMapAndGps();
+      } else if (activeMode === 'pin') {
+        openPinModal(imgPt);
       }
     });
 
@@ -360,11 +608,9 @@
       renderMapAndGps();
     }, { passive: false });
 
-
-    // --- TOUCH EVENT LISTENERS (ANDROID PINCH & PAN ENGINE) ---
+    // --- TOUCH EVENT LISTENERS ---
     canvas.addEventListener('touchstart', (e) => {
       if (e.touches.length === 1) {
-        // Single finger action
         const touch = e.touches[0];
         const imgPt = screenToImageCoords(touch.clientX, touch.clientY);
 
@@ -378,9 +624,10 @@
         } else if (activeMode === 'draw') {
           currentShape.push(imgPt);
           renderMapAndGps();
+        } else if (activeMode === 'pin') {
+          openPinModal(imgPt);
         }
       } else if (e.touches.length === 2) {
-        // Two fingers: Pinch Zoom
         isDragging = false;
         initialPinchDistance = getPinchDistance(e);
         initialScale = scale;
@@ -394,7 +641,6 @@
         panY = touch.clientY - dragStart.y;
         renderMapAndGps();
       } else if (e.touches.length === 2 && initialPinchDistance) {
-        // Handle Mobile Pinch Zooming
         const currentDistance = getPinchDistance(e);
         const rect = canvas.getBoundingClientRect();
 
@@ -436,7 +682,7 @@
       document.getElementById('measureInfo').innerText = `Total Distance: ${display}`;
     }
 
-    // Main Renderer
+    // --- MAIN CANVAS RENDERER ---
     function renderMapAndGps() {
       if (!baseImage || !canvas) return;
 
@@ -450,7 +696,24 @@
       // 1. Draw Base Map Image
       ctx.drawImage(baseImage, 0, 0);
 
-      // 2. Draw Finished Shapes
+      // 2. Draw GPS Track Log Lines
+      if (trackLogs.length > 1) {
+        ctx.beginPath();
+        if (mapBbox && baseImage) {
+          const [minX, minY, maxX, maxY] = mapBbox;
+          trackLogs.forEach((pt, index) => {
+            const px = baseImage.width * ((pt.lon - minX) / (maxX - minX));
+            const py = baseImage.height * (1 - ((pt.lat - minY) / (maxY - minY)));
+            if (index === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          });
+        }
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 4 / scale;
+        ctx.stroke();
+      }
+
+      // 3. Draw Finished Custom Shapes
       drawnShapes.concat(currentShape.length > 0 ? [currentShape] : []).forEach(shape => {
         if (shape.length === 0) return;
         ctx.beginPath();
@@ -473,7 +736,7 @@
         });
       });
 
-      // 3. Draw Measurement Lines
+      // 4. Draw Measurement Lines
       if (measurePoints.length > 0) {
         ctx.beginPath();
         ctx.moveTo(measurePoints[0].x, measurePoints[0].y);
@@ -494,7 +757,23 @@
         });
       }
 
-      // 4. Draw GPS Location Dot
+      // 5. Draw User Remarks / Pins
+      pins.forEach(pin => {
+        ctx.beginPath();
+        ctx.arc(pin.x, pin.y, 7 / scale, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ef4444';
+        ctx.fill();
+        ctx.lineWidth = 2 / scale;
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+
+        // Render Pin Label / Remark text on map
+        ctx.font = `${Math.max(10, 12 / scale)}px sans-serif`;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(`📍 ${pin.remark}`, pin.x + (10 / scale), pin.y + (4 / scale));
+      });
+
+      // 6. Draw Live GPS Location Dot
       if (currentGpsCoords && mapBbox) {
         const [minX, minY, maxX, maxY] = mapBbox;
         const { lon, lat } = currentGpsCoords;
@@ -521,7 +800,6 @@
       ctx.restore();
     }
 
-    // Modal UI Helper
     function showModal(icon, title, body, showPasscode) {
       canvas.classList.add('hidden');
       document.getElementById('statusModal').classList.remove('hidden');
