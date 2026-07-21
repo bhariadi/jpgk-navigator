@@ -40,6 +40,28 @@
   <main class="relative flex-1 bg-black flex items-center justify-center overflow-hidden p-0">
     <canvas id="mapCanvas" class="w-full h-full cursor-grab hidden touch-none"></canvas>
 
+    <!-- Center Precision Crosshair Overlay for Pin Mode -->
+    <div id="pinCrosshair" class="hidden pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+      <div class="relative flex items-center justify-center">
+        <!-- Target Reticle Circles -->
+        <div class="w-10 h-10 border-2 border-red-500 rounded-full bg-red-500/10 animate-pulse"></div>
+        <div class="absolute w-2 h-2 bg-red-500 rounded-full"></div>
+        <!-- Crosshair Hairlines -->
+        <div class="absolute w-12 h-0.5 bg-red-500/80"></div>
+        <div class="absolute h-12 w-0.5 bg-red-500/80"></div>
+      </div>
+    </div>
+
+    <!-- Floating Pin Target Confirmation Bar -->
+    <div id="pinActionBar" class="hidden absolute bottom-6 z-20 flex gap-2 bg-slate-900/90 border border-slate-700 p-2 rounded-xl shadow-2xl backdrop-blur-sm">
+      <button onclick="captureCenterPin()" class="bg-red-600 hover:bg-red-500 text-white font-bold text-xs px-4 py-2 rounded-lg transition flex items-center gap-1 shadow-md">
+        <span>📍 Confirm Pin Location</span>
+      </button>
+      <button onclick="setMode('pan')" class="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-2 rounded-lg transition">
+        Cancel
+      </button>
+    </div>
+
     <!-- Context Floating Info Bar -->
     <div id="measureInfo" class="hidden absolute top-4 left-4 bg-slate-900/90 border border-slate-700 text-emerald-400 text-xs font-mono px-3 py-2 rounded-lg shadow-xl z-10">
       Length: 0.00 m
@@ -288,7 +310,19 @@
         document.getElementById(activeBtn).className = 'px-2.5 py-1 text-xs rounded font-semibold bg-emerald-600 text-white whitespace-nowrap';
       }
 
-      canvas.style.cursor = mode === 'pan' ? 'grab' : 'crosshair';
+      // Handle Crosshair and Action Controls visibility for Pin Mode
+      const crosshair = document.getElementById('pinCrosshair');
+      const pinActionBar = document.getElementById('pinActionBar');
+      
+      if (mode === 'pin') {
+        crosshair.classList.remove('hidden');
+        pinActionBar.classList.remove('hidden');
+        canvas.style.cursor = 'grab'; // Allow map grabbing under crosshair
+      } else {
+        crosshair.classList.add('hidden');
+        pinActionBar.classList.add('hidden');
+        canvas.style.cursor = mode === 'pan' ? 'grab' : 'crosshair';
+      }
 
       if (mode !== 'measure') {
         document.getElementById('measureInfo').classList.add('hidden');
@@ -319,7 +353,16 @@
       }
     }
 
-    // --- PIN POINT ENGINE ---
+    // --- PIN POINT ENGINE (CROSSHAIR TARGETING) ---
+    function captureCenterPin() {
+      // Calculate exact image coordinates directly beneath the screen center crosshair
+      const centerScreenX = canvas.width / 2;
+      const centerScreenY = canvas.height / 2;
+      const centerImgPt = screenToImageCoords(centerScreenX, centerScreenY);
+      
+      openPinModal(centerImgPt);
+    }
+
     function openPinModal(imgPt) {
       pendingPinCoords = imgPt;
       document.getElementById('pinRemarkInput').value = '';
@@ -489,7 +532,6 @@
           return;
         } catch (err) {
           if (err.name === 'AbortError') return; // User cancelled
-          // Fallback to standard download if permission or context restricts handle
         }
       }
 
@@ -553,7 +595,7 @@
     canvas.addEventListener('mousedown', (e) => {
       const imgPt = screenToImageCoords(e.clientX, e.clientY);
 
-      if (activeMode === 'pan') {
+      if (activeMode === 'pan' || activeMode === 'pin') { // Allow panning in Pin Mode
         isDragging = true;
         dragStart = { x: e.clientX - panX, y: e.clientY - panY };
         canvas.style.cursor = 'grabbing';
@@ -564,13 +606,11 @@
       } else if (activeMode === 'draw') {
         currentShape.push(imgPt);
         renderMapAndGps();
-      } else if (activeMode === 'pin') {
-        openPinModal(imgPt);
       }
     });
 
     canvas.addEventListener('mousemove', (e) => {
-      if (isDragging && activeMode === 'pan') {
+      if (isDragging && (activeMode === 'pan' || activeMode === 'pin')) {
         panX = e.clientX - dragStart.x;
         panY = e.clientY - dragStart.y;
         renderMapAndGps();
@@ -580,7 +620,7 @@
     window.addEventListener('mouseup', () => {
       if (isDragging) {
         isDragging = false;
-        canvas.style.cursor = activeMode === 'pan' ? 'grab' : 'crosshair';
+        canvas.style.cursor = (activeMode === 'pan' || activeMode === 'pin') ? 'grab' : 'crosshair';
       }
     });
 
@@ -614,7 +654,7 @@
         const touch = e.touches[0];
         const imgPt = screenToImageCoords(touch.clientX, touch.clientY);
 
-        if (activeMode === 'pan') {
+        if (activeMode === 'pan' || activeMode === 'pin') { // Allow panning/adjusting target in Pin mode
           isDragging = true;
           dragStart = { x: touch.clientX - panX, y: touch.clientY - panY };
         } else if (activeMode === 'measure') {
@@ -624,8 +664,6 @@
         } else if (activeMode === 'draw') {
           currentShape.push(imgPt);
           renderMapAndGps();
-        } else if (activeMode === 'pin') {
-          openPinModal(imgPt);
         }
       } else if (e.touches.length === 2) {
         isDragging = false;
@@ -635,7 +673,7 @@
     }, { passive: true });
 
     canvas.addEventListener('touchmove', (e) => {
-      if (e.touches.length === 1 && isDragging && activeMode === 'pan') {
+      if (e.touches.length === 1 && isDragging && (activeMode === 'pan' || activeMode === 'pin')) {
         const touch = e.touches[0];
         panX = touch.clientX - dragStart.x;
         panY = touch.clientY - dragStart.y;
