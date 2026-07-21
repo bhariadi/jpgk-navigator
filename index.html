@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+  <title>Encrypted .JPGK Field Navigator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col select-none overflow-hidden font-sans">
+
+  <!-- Header Bar -->
+  <header class="bg-slate-800 border-b border-slate-700 p-3 flex flex-wrap items-center justify-between z-20 shadow-lg gap-2">
+    <div class="flex items-center gap-2">
+      <span class="text-xl">🔒</span>
+      <div>
+        <h1 class="font-bold text-emerald-400 text-xs sm:text-sm">Secure JPGK Navigator</h1>
+        <p id="gpsStatus" class="text-[10px] text-slate-400">GPS: Initializing...</p>
+      </div>
+    </div>
+
+    <!-- Active Tool Controls -->
+    <div id="toolBar" class="hidden flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-700 overflow-x-auto">
+      <button onclick="setMode('pan')" id="btnPan" class="px-2.5 py-1 text-xs rounded font-semibold bg-emerald-600 text-white whitespace-nowrap">✋ Pan</button>
+      <button onclick="setMode('measure')" id="btnMeasure" class="px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800 whitespace-nowrap">📏 Measure</button>
+      <button onclick="setMode('draw')" id="btnDraw" class="px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800 whitespace-nowrap">✏️ Draw</button>
+      <button onclick="setMode('pin')" id="btnPin" class="px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800 whitespace-nowrap">📍 Pin Point</button>
+      <button onclick="toggleTracking()" id="btnTrack" class="px-2.5 py-1 text-xs rounded font-semibold bg-blue-600 hover:bg-blue-500 text-white whitespace-nowrap">🛰️ Start Track</button>
+      <button onclick="resetView()" class="px-2 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300 whitespace-nowrap">🎯 Reset</button>
+      <button onclick="openExportModal()" class="px-2 py-1 text-xs rounded bg-emerald-700 hover:bg-emerald-600 text-white whitespace-nowrap">💾 Export Data</button>
+      <button onclick="clearGraphics()" class="px-2 py-1 text-xs rounded bg-red-900/40 hover:bg-red-800/60 text-red-300 border border-red-700 whitespace-nowrap">🗑️ Clear</button>
+    </div>
+
+    <label class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-2 rounded-lg cursor-pointer transition flex items-center gap-1">
+      <span>📂 Load .JPGK</span>
+      <input type="file" id="fileInput" accept=".jpgk,.json" class="hidden" onchange="handleFileSelect(event)">
+    </label>
+  </header>
+
+  <!-- Main Display Area -->
+  <main class="relative flex-1 bg-black flex items-center justify-center overflow-hidden p-0">
+    <canvas id="mapCanvas" class="w-full h-full cursor-grab hidden touch-none"></canvas>
+
+    <!-- Center Precision Crosshair Overlay for Pin Mode -->
+    <div id="pinCrosshair" class="hidden pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+      <div class="relative flex items-center justify-center">
+        <!-- Target Reticle Circles -->
+        <div class="w-10 h-10 border-2 border-red-500 rounded-full bg-red-500/10 animate-pulse"></div>
+        <div class="absolute w-2 h-2 bg-red-500 rounded-full"></div>
+        <!-- Crosshair Hairlines -->
+        <div class="absolute w-12 h-0.5 bg-red-500/80"></div>
+        <div class="absolute h-12 w-0.5 bg-red-500/80"></div>
+      </div>
+    </div>
+
+    <!-- Floating Pin Target Confirmation Bar (Raised bottom offset for mobile viewports) -->
+    <div id="pinActionBar" class="hidden absolute bottom-16 sm:bottom-6 z-30 flex gap-2 bg-slate-900/95 border border-slate-700 p-2.5 rounded-xl shadow-2xl backdrop-blur-md">
+      <button onclick="captureCenterPin()" class="bg-red-600 hover:bg-red-500 active:bg-red-700 text-white font-bold text-xs px-4 py-2.5 rounded-lg transition flex items-center gap-1 shadow-md">
+        <span>📍 Confirm Pin Location</span>
+      </button>
+      <button onclick="setMode('pan')" class="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-2.5 rounded-lg transition">
+        Cancel
+      </button>
+    </div>
+
+    <!-- Context Floating Info Bar -->
+    <div id="measureInfo" class="hidden absolute top-4 left-4 bg-slate-900/90 border border-slate-700 text-emerald-400 text-xs font-mono px-3 py-2 rounded-lg shadow-xl z-10">
+      Length: 0.00 m
+    </div>
+
+    <!-- Passcode & Status Modal -->
+    <div id="statusModal" class="bg-slate-800 border border-slate-700 p-6 rounded-2xl max-w-sm text-center shadow-2xl mx-4 z-30">
+      <div id="statusIcon" class="text-4xl mb-2">🗺️</div>
+      <h2 id="statusTitle" class="text-lg font-bold text-slate-200">Load Protected Map</h2>
+      <p id="statusBody" class="text-xs text-slate-400 mt-2 mb-4">
+        Select an encrypted .jpgk file to unlock field navigation.
+      </p>
+
+      <div id="passcodeContainer" class="hidden flex flex-col gap-3">
+        <input type="password" id="passcodeInput" placeholder="Enter Map Passcode" 
+               class="bg-slate-900 border border-slate-700 text-slate-100 text-sm rounded-lg p-2.5 text-center focus:outline-none focus:border-emerald-500"
+               onkeydown="if(event.key === 'Enter') attemptDecryption()">
+        <button onclick="attemptDecryption()" 
+                class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm py-2 px-4 rounded-lg transition">
+          Unlock & Decrypt Map
+        </button>
+      </div>
+    </div>
+
+    <!-- Pin Remark Modal -->
+    <div id="pinModal" class="hidden absolute bg-slate-800 border border-slate-700 p-6 rounded-2xl max-w-xs text-center shadow-2xl mx-4 z-40">
+      <h3 class="text-base font-bold text-slate-200 mb-2">Add Point Remark</h3>
+      <input type="text" id="pinRemarkInput" placeholder="Enter remark/notes..." 
+             class="bg-slate-900 border border-slate-700 text-slate-100 text-sm rounded-lg p-2.5 text-center w-full mb-4 focus:outline-none focus:border-emerald-500"
+             onkeydown="if(event.key === 'Enter') confirmPin()">
+      <div class="flex gap-2 justify-center">
+        <button onclick="confirmPin()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-4 rounded-lg transition">Save Pin</button>
+        <button onclick="closePinModal()" class="bg-slate-700 hover:bg-slate-600 text-white text-xs py-2 px-4 rounded-lg transition">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Export Dialog Modal -->
+    <div id="exportModal" class="hidden absolute bg-slate-800 border border-slate-700 p-6 rounded-2xl max-w-sm text-center shadow-2xl mx-4 z-40">
+      <h3 class="text-base font-bold text-slate-200 mb-2">💾 Export Field Data</h3>
+      <p class="text-xs text-slate-400 mb-4">Choose your preferred structural format configuration:</p>
+      
+      <div class="flex flex-col gap-2.5 mb-5 text-left text-xs">
+        <label class="flex items-center gap-2 cursor-pointer bg-slate-900 p-2.5 rounded-lg border border-slate-700">
+          <input type="radio" name="exportFormat" value="geojson" checked class="accent-emerald-500">
+          <div><strong class="text-emerald-400">GeoJSON</strong> <span class="text-slate-400 block">(.geojson) Standard spatial format</span></div>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer bg-slate-900 p-2.5 rounded-lg border border-slate-700">
+          <input type="radio" name="exportFormat" value="kml" class="accent-emerald-500">
+          <div><strong class="text-emerald-400">KML</strong> <span class="text-slate-400 block">(.kml) Google Earth & GIS compatible</span></div>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer bg-slate-900 p-2.5 rounded-lg border border-slate-700">
+          <input type="radio" name="exportFormat" value="csv" class="accent-emerald-500">
+          <div><strong class="text-emerald-400">CSV</strong> <span class="text-slate-400 block">(.csv) Tabular spreadsheet format</span></div>
+        </label>
+      </div>
+
+      <div class="flex gap-2 justify-center">
+        <button onclick="executeExport()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-4 rounded-lg transition">Save to Directory</button>
+        <button onclick="closeExportModal()" class="bg-slate-700 hover:bg-slate-600 text-white text-xs py-2 px-4 rounded-lg transition">Cancel</button>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    let loadedContainerData = null;
+    let baseImage = null;
+    let currentGpsCoords = null;
+    let mapBbox = null;
+
+    let scale = 1;
+    let panX = 0;
+    let panY = 0;
+    let isDragging = false;
+    let dragStart = { x: 0, y: 0 };
+
+    let initialPinchDistance = null;
+    let initialScale = 1;
+
+    let activeMode = 'pan'; // 'pan', 'measure', 'draw', 'pin'
+    let measurePoints = [];
+    let drawnShapes = [];
+    let currentShape = [];
+    
+    // Field Data Capture Layers
+    let pins = []; // Array of {x, y, lon, lat, remark, timestamp}
+    let trackLogs = []; // Array of {lon, lat, timestamp}
+    let isTracking = false;
+    let pendingPinCoords = null;
+
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+    const gpsStatus = document.getElementById('gpsStatus');
+
+    function resizeCanvas() {
+      if (!canvas) return;
+      canvas.width = canvas.parentElement.clientWidth;
+      canvas.height = canvas.parentElement.clientHeight;
+      renderMapAndGps();
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    function startGpsTracking() {
+      if (window.location.protocol === 'file:') {
+        gpsStatus.innerText = "GPS Disabled: Opened via file://";
+        gpsStatus.className = "text-[10px] text-amber-400 font-mono font-bold";
+        return;
+      }
+
+      if (!('geolocation' in navigator)) {
+        gpsStatus.innerText = "GPS Error: Geolocation not supported.";
+        return;
+      }
+
+      navigator.geolocation.watchPosition(
+        (pos) => {
+          currentGpsCoords = { lon: pos.coords.longitude, lat: pos.coords.latitude };
+          gpsStatus.innerText = `GPS Fix: ${currentGpsCoords.lat.toFixed(5)}, ${currentGpsCoords.lon.toFixed(5)}`;
+          gpsStatus.className = "text-[10px] text-emerald-400 font-mono font-bold";
+          
+          if (isTracking && currentGpsCoords) {
+            trackLogs.push({ lon: currentGpsCoords.lon, lat: currentGpsCoords.lat, timestamp: new Date().toISOString() });
+          }
+          renderMapAndGps();
+        },
+        (err) => {
+          gpsStatus.innerText = `GPS Error: ${err.message}`;
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    }
+    window.addEventListener('DOMContentLoaded', startGpsTracking);
+
+    async function handleFileSelect(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        loadedContainerData = JSON.parse(text);
+
+        if (loadedContainerData.format !== "JPGK_STD_V1") {
+          throw new Error("Invalid format. File is not a valid encrypted .jpgk package.");
+        }
+
+        const currentEpoch = Math.floor(Date.now() / 1000);
+        if (currentEpoch > loadedContainerData.expiry_epoch) {
+          showModal('🔒', 'Map Access Expired', `Access blocked. This map expired on ${loadedContainerData.expiry_readable}.`, false);
+          return;
+        }
+
+        mapBbox = loadedContainerData.bbox;
+        showModal('🔑', 'Enter Passcode', 'This map is passcode-protected. Enter key to decrypt:', true);
+
+      } catch (err) {
+        showModal('⚠️', 'Invalid File', err.message, false);
+      }
+    }
+
+    async function attemptDecryption() {
+      const passcode = document.getElementById('passcodeInput').value;
+      if (!passcode) return;
+
+      try {
+        const salt = Uint8Array.from(atob(loadedContainerData.salt), c => c.charCodeAt(0));
+        const ciphertext = Uint8Array.from(atob(loadedContainerData.ciphertext), c => c.charCodeAt(0));
+
+        const enc = new TextEncoder();
+        const keyMaterial = await crypto.subtle.importKey(
+          "raw", enc.encode(passcode), "PBKDF2", false, ["deriveBits"]
+        );
+
+        const derivedBits = await crypto.subtle.deriveBits(
+          { name: "PBKDF2", salt: salt, iterations: 100000, hash: "SHA-256" },
+          keyMaterial,
+          256
+        );
+
+        const key = new Uint8Array(derivedBits);
+        const keystream = new Uint8Array(ciphertext.length);
+        let offset = 0;
+        let counter = 0;
+
+        while (offset < ciphertext.length) {
+          const blockInput = new Uint8Array(key.length + 4);
+          blockInput.set(key, 0);
+          const view = new DataView(blockInput.buffer);
+          view.setUint32(key.length, counter, false);
+
+          const blockHash = await crypto.subtle.digest("SHA-256", blockInput);
+          const blockBytes = new Uint8Array(blockHash);
+
+          const copyLength = Math.min(blockBytes.length, ciphertext.length - offset);
+          keystream.set(blockBytes.subarray(0, copyLength), offset);
+
+          offset += copyLength;
+          counter++;
+        }
+
+        const decryptedBytes = new Uint8Array(ciphertext.length);
+        for (let i = 0; i < ciphertext.length; i++) {
+          decryptedBytes[i] = ciphertext[i] ^ keystream[i];
+        }
+
+        if (decryptedBytes[0] !== 0xFF || decryptedBytes[1] !== 0xD8 || decryptedBytes[2] !== 0xFF) {
+          throw new Error("Invalid passcode");
+        }
+
+        const blob = new Blob([decryptedBytes], { type: 'image/jpeg' });
+        const imageUrl = URL.createObjectURL(blob);
+
+        baseImage = new Image();
+        baseImage.onload = () => {
+          canvas.classList.remove('hidden');
+          document.getElementById('statusModal').classList.add('hidden');
+          document.getElementById('toolBar').classList.remove('hidden');
+          URL.revokeObjectURL(imageUrl);
+          resizeCanvas();
+          resetView();
+        };
+        baseImage.src = imageUrl;
+
+      } catch (err) {
+        alert("❌ Incorrect Passcode or corrupted payload!");
+      }
+    }
+
+    function resetView() {
+      if (!baseImage) return;
+      scale = Math.min(canvas.width / baseImage.width, canvas.height / baseImage.height);
+      panX = (canvas.width - baseImage.width * scale) / 2;
+      panY = (canvas.height - baseImage.height * scale) / 2;
+      renderMapAndGps();
+    }
+
+    function setMode(mode) {
+      activeMode = mode;
+      document.querySelectorAll('#toolBar button').forEach(b => {
+        if (b.id.startsWith('btn') && b.id !== 'btnTrack') {
+          b.className = 'px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800 whitespace-nowrap';
+        }
+      });
+
+      if (mode !== 'track') {
+        const activeBtn = mode === 'pan' ? 'btnPan' : mode === 'measure' ? 'btnMeasure' : mode === 'draw' ? 'btnDraw' : 'btnPin';
+        document.getElementById(activeBtn).className = 'px-2.5 py-1 text-xs rounded font-semibold bg-emerald-600 text-white whitespace-nowrap';
+      }
+
+      // Handle Crosshair and Action Controls visibility for Pin Mode
+      const crosshair = document.getElementById('pinCrosshair');
+      const pinActionBar = document.getElementById('pinActionBar');
+      
+      if (mode === 'pin') {
+        crosshair.classList.remove('hidden');
+        pinActionBar.classList.remove('hidden');
+        canvas.style.cursor = 'grab';
+      } else {
+        crosshair.classList.add('hidden');
+        pinActionBar.classList.add('hidden');
+        canvas.style.cursor = mode === 'pan' ? 'grab' : 'crosshair';
+      }
+
+      if (mode !== 'measure') {
+        document.getElementById('measureInfo').classList.add('hidden');
+      } else {
+        document.getElementById('measureInfo').classList.remove('hidden');
+      }
+
+      if (mode !== 'draw' && currentShape.length > 0) {
+        drawnShapes.push([...currentShape]);
+        currentShape = [];
+      }
+      renderMapAndGps();
+    }
+
+    // --- TRACKING ENGINE ---
+    function toggleTracking() {
+      isTracking = !isTracking;
+      const btn = document.getElementById('btnTrack');
+      if (isTracking) {
+        btn.className = 'px-2.5 py-1 text-xs rounded font-semibold bg-red-600 hover:bg-red-500 text-white whitespace-nowrap animate-pulse';
+        btn.innerText = '🛰️ Stop Track';
+        if (currentGpsCoords) {
+          trackLogs.push({ lon: currentGpsCoords.lon, lat: currentGpsCoords.lat, timestamp: new Date().toISOString() });
+        }
+      } else {
+        btn.className = 'px-2.5 py-1 text-xs rounded font-semibold bg-blue-600 hover:bg-blue-500 text-white whitespace-nowrap';
+        btn.innerText = '🛰️ Start Track';
+      }
+    }
+
+    // --- EXACT PIN POINT TARGETING ---
+    function captureCenterPin() {
+      const rect = canvas.getBoundingClientRect();
+      const centerViewportX = rect.left + rect.width / 2;
+      const centerViewportY = rect.top + rect.height / 2;
+      
+      const centerImgPt = screenToImageCoords(centerViewportX, centerViewportY);
+      openPinModal(centerImgPt);
+    }
+
+    function openPinModal(imgPt) {
+      pendingPinCoords = imgPt;
+      document.getElementById('pinRemarkInput').value = '';
+      document.getElementById('pinModal').classList.remove('hidden');
+      document.getElementById('pinRemarkInput').focus();
+    }
+
+    function closePinModal() {
+      document.getElementById('pinModal').classList.add('hidden');
+      pendingPinCoords = null;
+    }
+
+    function confirmPin() {
+      const remark = document.getElementById('pinRemarkInput').value.trim() || 'Unnamed Pin';
+      if (pendingPinCoords) {
+        const geo = imageToGeoCoords(pendingPinCoords.x, pendingPinCoords.y);
+        pins.push({
+          x: pendingPinCoords.x,
+          y: pendingPinCoords.y,
+          lon: geo.lon,
+          lat: geo.lat,
+          remark: remark,
+          timestamp: new Date().toISOString()
+        });
+      }
+      closePinModal();
+      renderMapAndGps();
+    }
+
+    function clearGraphics() {
+      measurePoints = [];
+      drawnShapes = [];
+      currentShape = [];
+      pins = [];
+      trackLogs = [];
+      isTracking = false;
+      document.getElementById('btnTrack').className = 'px-2.5 py-1 text-xs rounded font-semibold bg-blue-600 hover:bg-blue-500 text-white whitespace-nowrap';
+      document.getElementById('btnTrack').innerText = '🛰️ Start Track';
+      document.getElementById('measureInfo').innerText = "Length: 0.00 m";
+      renderMapAndGps();
+    }
+
+    // --- EXPORT & DIRECTORY SAVE SYSTEM ---
+    function openExportModal() {
+      if (pins.length === 0 && trackLogs.length === 0 && drawnShapes.length === 0) {
+        alert("⚠️ No field data recorded to export yet (pins, tracks, or drawings).");
+        return;
+      }
+      document.getElementById('exportModal').classList.remove('hidden');
+    }
+
+    function closeExportModal() {
+      document.getElementById('exportModal').classList.add('hidden');
+    }
+
+    async function executeExport() {
+      const format = document.querySelector('input[name="exportFormat"]:checked').value;
+      let fileContent = "";
+      let mimeType = "";
+      let extension = "";
+
+      const timestampTag = new Date().toISOString().replace(/[:.]/g, '-');
+
+      if (format === 'geojson') {
+        extension = 'geojson';
+        mimeType = 'application/json';
+        
+        const features = [];
+        
+        pins.forEach(p => {
+          features.push({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: [p.lon, p.lat] },
+            properties: { type: "pin", remark: p.remark, time: p.timestamp }
+          });
+        });
+
+        if (trackLogs.length > 0) {
+          features.push({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: trackLogs.map(t => [t.lon, t.lat]) },
+            properties: { type: "track", count: trackLogs.length }
+          });
+        }
+
+        drawnShapes.forEach(shape => {
+          const coords = shape.map(pt => {
+            const geo = imageToGeoCoords(pt.x, pt.y);
+            return [geo.lon, geo.lat];
+          });
+          features.push({
+            type: "Feature",
+            geometry: { type: "Polygon", coordinates: [coords] },
+            properties: { type: "drawn_shape" }
+          });
+        });
+
+        const geojsonObj = { type: "FeatureCollection", features: features };
+        fileContent = JSON.stringify(geojsonObj, null, 2);
+
+      } else if (format === 'kml') {
+        extension = 'kml';
+        mimeType = 'application/vnd.google-earth.kml+xml';
+
+        let placemarks = '';
+        pins.forEach(p => {
+          placemarks += `
+    <Placemark>
+      <name>${escapeXml(p.remark)}</name>
+      <description>Captured via JPGK Navigator at ${p.timestamp}</description>
+      <Point><coordinates>${p.lon},${p.lat},0</coordinates></Point>
+    </Placemark>`;
+        });
+
+        if (trackLogs.length > 0) {
+          const coordsStr = trackLogs.map(t => `${t.lon},${t.lat},0`).join(' ');
+          placemarks += `
+    <Placemark>
+      <name>Field Track Log</name>
+      <LineString><coordinates>${coordsStr}</coordinates></LineString>
+    </Placemark>`;
+        }
+
+        fileContent = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>JPGK Field Export - ${timestampTag}</name>
+    ${placemarks}
+  </Document>
+</kml>`;
+
+      } else if (format === 'csv') {
+        extension = 'csv';
+        mimeType = 'text/csv';
+
+        let csvRows = ['Type,Longitude,Latitude,Remark,Timestamp'];
+        pins.forEach(p => {
+          csvRows.push(`Pin,${p.lon},${p.lat},"${escapeCsv(p.remark)}","${p.timestamp}"`);
+        });
+        trackLogs.forEach(t => {
+          csvRows.push(`TrackPoint,${t.lon},${t.lat},"GPS Track Log","${t.timestamp}"`);
+        });
+        fileContent = csvRows.join('\n');
+      }
+
+      closeExportModal();
+
+      const filename = `field_data_${timestampTag}.${extension}`;
+      
+      if ('showSaveFilePicker' in window) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: filename,
+            types: [{
+              description: `${extension.toUpperCase()} Document`,
+              accept: { [mimeType]: [`.${extension}`] }
+            }]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(fileContent);
+          await writable.close();
+          alert("✅ File saved successfully into selected directory!");
+          return;
+        } catch (err) {
+          if (err.name === 'AbortError') return;
+        }
+      }
+
+      const blob = new Blob([fileContent], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function escapeXml(str) {
+      return str.replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','\'':'&apos;','"':'&quot;'}[c]));
+    }
+
+    function escapeCsv(str) {
+      return str.replace(/"/g, '""');
+    }
+
+    function screenToImageCoords(screenX, screenY) {
+      const rect = canvas.getBoundingClientRect();
+      const clickX = screenX - rect.left;
+      const clickY = screenY - rect.top;
+      return {
+        x: (clickX - panX) / scale,
+        y: (clickY - panY) / scale
+      };
+    }
+
+    function imageToGeoCoords(imgX, imgY) {
+      if (!mapBbox || !baseImage) return { lon: 0, lat: 0 };
+      const [minX, minY, maxX, maxY] = mapBbox;
+      const lon = minX + (imgX / baseImage.width) * (maxX - minX);
+      const lat = maxY - (imgY / baseImage.height) * (maxY - minY);
+      return { lon, lat };
+    }
+
+    function calculateHaversine(pt1, pt2) {
+      const R = 6371000;
+      const dLat = (pt2.lat - pt1.lat) * Math.PI / 180;
+      const dLon = (pt2.lon - pt1.lon) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(pt1.lat * Math.PI / 180) * Math.cos(pt2.lat * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    }
+
+    function getPinchDistance(e) {
+      return Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+    }
+
+    // --- MOUSE EVENT LISTENERS ---
+    canvas.addEventListener('mousedown', (e) => {
+      const imgPt = screenToImageCoords(e.clientX, e.clientY);
+
+      if (activeMode === 'pan' || activeMode === 'pin') {
+        isDragging = true;
+        dragStart = { x: e.clientX - panX, y: e.clientY - panY };
+        canvas.style.cursor = 'grabbing';
+      } else if (activeMode === 'measure') {
+        measurePoints.push(imgPt);
+        updateMeasurement();
+        renderMapAndGps();
+      } else if (activeMode === 'draw') {
+        currentShape.push(imgPt);
+        renderMapAndGps();
+      }
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (isDragging && (activeMode === 'pan' || activeMode === 'pin')) {
+        panX = e.clientX - dragStart.x;
+        panY = e.clientY - dragStart.y;
+        renderMapAndGps();
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        canvas.style.cursor = (activeMode === 'pan' || activeMode === 'pin') ? 'grab' : 'crosshair';
+      }
+    });
+
+    canvas.addEventListener('dblclick', () => {
+      if (activeMode === 'draw' && currentShape.length > 0) {
+        drawnShapes.push([...currentShape]);
+        currentShape = [];
+        renderMapAndGps();
+      }
+    });
+
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const newScale = Math.max(0.05, Math.min(scale * zoomFactor, 50));
+      panX = mouseX - (mouseX - panX) * (newScale / scale);
+      panY = mouseY - (mouseY - panY) * (newScale / scale);
+      scale = newScale;
+
+      renderMapAndGps();
+    }, { passive: false });
+
+    // --- TOUCH EVENT LISTENERS ---
+    canvas.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        const imgPt = screenToImageCoords(touch.clientX, touch.clientY);
+
+        if (activeMode === 'pan' || activeMode === 'pin') {
+          isDragging = true;
+          dragStart = { x: touch.clientX - panX, y: touch.clientY - panY };
+        } else if (activeMode === 'measure') {
+          measurePoints.push(imgPt);
+          updateMeasurement();
+          renderMapAndGps();
+        } else if (activeMode === 'draw') {
+          currentShape.push(imgPt);
+          renderMapAndGps();
+        }
+      } else if (e.touches.length === 2) {
+        isDragging = false;
+        initialPinchDistance = getPinchDistance(e);
+        initialScale = scale;
+      }
+    }, { passive: true });
+
+    canvas.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 1 && isDragging && (activeMode === 'pan' || activeMode === 'pin')) {
+        const touch = e.touches[0];
+        panX = touch.clientX - dragStart.x;
+        panY = touch.clientY - dragStart.y;
+        renderMapAndGps();
+      } else if (e.touches.length === 2 && initialPinchDistance) {
+        const currentDistance = getPinchDistance(e);
+        const rect = canvas.getBoundingClientRect();
+
+        const centerTouchX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+        const centerTouchY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+
+        const zoomFactor = currentDistance / initialPinchDistance;
+        const newScale = Math.max(0.05, Math.min(initialScale * zoomFactor, 50));
+
+        panX = centerTouchX - (centerTouchX - panX) * (newScale / scale);
+        panY = centerTouchY - (centerTouchY - panY) * (newScale / scale);
+        scale = newScale;
+
+        renderMapAndGps();
+      }
+    }, { passive: true });
+
+    canvas.addEventListener('touchend', (e) => {
+      if (e.touches.length < 2) {
+        initialPinchDistance = null;
+      }
+      if (e.touches.length === 0) {
+        isDragging = false;
+      }
+    });
+
+    function updateMeasurement() {
+      let totalDist = 0;
+      for (let i = 0; i < measurePoints.length - 1; i++) {
+        const geo1 = imageToGeoCoords(measurePoints[i].x, measurePoints[i].y);
+        const geo2 = imageToGeoCoords(measurePoints[i + 1].x, measurePoints[i + 1].y);
+        totalDist += calculateHaversine(geo1, geo2);
+      }
+
+      const display = totalDist > 1000 
+        ? `${(totalDist / 1000).toFixed(2)} km` 
+        : `${totalDist.toFixed(1)} m`;
+
+      document.getElementById('measureInfo').innerText = `Total Distance: ${display}`;
+    }
+
+    // --- MAIN CANVAS RENDERER ---
+    function renderMapAndGps() {
+      if (!baseImage || !canvas) return;
+
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.save();
+      ctx.translate(panX, panY);
+      ctx.scale(scale, scale);
+
+      // 1. Draw Base Map Image
+      ctx.drawImage(baseImage, 0, 0);
+
+      // 2. Draw GPS Track Log Lines
+      if (trackLogs.length > 1) {
+        ctx.beginPath();
+        if (mapBbox && baseImage) {
+          const [minX, minY, maxX, maxY] = mapBbox;
+          trackLogs.forEach((pt, index) => {
+            const px = baseImage.width * ((pt.lon - minX) / (maxX - minX));
+            const py = baseImage.height * (1 - ((pt.lat - minY) / (maxY - minY)));
+            if (index === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          });
+        }
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 4 / scale;
+        ctx.stroke();
+      }
+
+      // 3. Draw Finished Custom Shapes
+      drawnShapes.concat(currentShape.length > 0 ? [currentShape] : []).forEach(shape => {
+        if (shape.length === 0) return;
+        ctx.beginPath();
+        ctx.moveTo(shape[0].x, shape[0].y);
+        for (let i = 1; i < shape.length; i++) {
+          ctx.lineTo(shape[i].x, shape[i].y);
+        }
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 3 / scale;
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.2)';
+        ctx.fill();
+
+        shape.forEach(pt => {
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, 4 / scale, 0, 2 * Math.PI);
+          ctx.fillStyle = '#d97706';
+          ctx.fill();
+        });
+      });
+
+      // 4. Draw Measurement Lines
+      if (measurePoints.length > 0) {
+        ctx.beginPath();
+        ctx.moveTo(measurePoints[0].x, measurePoints[0].y);
+        for (let i = 1; i < measurePoints.length; i++) {
+          ctx.lineTo(measurePoints[i].x, measurePoints[i].y);
+        }
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 3 / scale;
+        ctx.setLineDash([6 / scale, 6 / scale]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        measurePoints.forEach(pt => {
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, 5 / scale, 0, 2 * Math.PI);
+          ctx.fillStyle = '#059669';
+          ctx.fill();
+        });
+      }
+
+      // 5. Draw User Remarks / Pins (Single Consistent Red Dot Style)
+      pins.forEach(pin => {
+        ctx.beginPath();
+        ctx.arc(pin.x, pin.y, 7 / scale, 0, 2 * Math.PI);
+        ctx.fillStyle = '#ef4444';
+        ctx.fill();
+        ctx.lineWidth = 2 / scale;
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+
+        // Render Pin Label / Remark text on map
+        ctx.font = `${Math.max(10, 12 / scale)}px sans-serif`;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(`📍 ${pin.remark}`, pin.x + (10 / scale), pin.y + (4 / scale));
+      });
+
+      // 6. Draw Live GPS Location Dot
+      if (currentGpsCoords && mapBbox) {
+        const [minX, minY, maxX, maxY] = mapBbox;
+        const { lon, lat } = currentGpsCoords;
+
+        if (lon >= minX && lon <= maxX && lat >= minY && lat <= maxY) {
+          const pixelX = baseImage.width * ((lon - minX) / (maxX - minX));
+          const pixelY = baseImage.height * (1 - ((lat - minY) / (maxY - minY)));
+
+          ctx.beginPath();
+          ctx.arc(pixelX, pixelY, 18 / scale, 0, 2 * Math.PI);
+          ctx.fillStyle = 'rgba(59, 130, 246, 0.3)';
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(pixelX, pixelY, 8 / scale, 0, 2 * Math.PI);
+          ctx.fillStyle = '#2563eb';
+          ctx.fill();
+          ctx.lineWidth = 2 / scale;
+          ctx.strokeStyle = '#ffffff';
+          ctx.stroke();
+        }
+      }
+
+      ctx.restore();
+    }
+
+    function showModal(icon, title, body, showPasscode) {
+      canvas.classList.add('hidden');
+      document.getElementById('statusModal').classList.remove('hidden');
+      document.getElementById('statusIcon').innerText = icon;
+      document.getElementById('statusTitle').innerText = title;
+      document.getElementById('statusBody').innerText = body;
+
+      const pContainer = document.getElementById('passcodeContainer');
+      if (showPasscode) {
+        pContainer.classList.remove('hidden');
+        document.getElementById('passcodeInput').value = '';
+        document.getElementById('passcodeInput').focus();
+      } else {
+        pContainer.classList.add('hidden');
+      }
+    }
+  </script>
+</body>
+</html>
