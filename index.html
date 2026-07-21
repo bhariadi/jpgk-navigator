@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
   <title>Encrypted .JPGK Field Navigator</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
@@ -19,12 +19,12 @@
     </div>
 
     <!-- Active Tool Controls -->
-    <div id="toolBar" class="hidden flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-700">
-      <button onclick="setMode('pan')" id="btnPan" class="px-2.5 py-1 text-xs rounded font-semibold bg-emerald-600 text-white">✋ Pan</button>
-      <button onclick="setMode('measure')" id="btnMeasure" class="px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800">📏 Measure</button>
-      <button onclick="setMode('draw')" id="btnDraw" class="px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800">✏️ Draw</button>
-      <button onclick="resetView()" class="px-2 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300">🎯 Reset</button>
-      <button onclick="clearGraphics()" class="px-2 py-1 text-xs rounded bg-red-900/40 hover:bg-red-800/60 text-red-300 border border-red-700">🗑️ Clear</button>
+    <div id="toolBar" class="hidden flex items-center gap-1 bg-slate-900 p-1 rounded-lg border border-slate-700 overflow-x-auto">
+      <button onclick="setMode('pan')" id="btnPan" class="px-2.5 py-1 text-xs rounded font-semibold bg-emerald-600 text-white whitespace-nowrap">✋ Pan</button>
+      <button onclick="setMode('measure')" id="btnMeasure" class="px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800 whitespace-nowrap">📏 Measure</button>
+      <button onclick="setMode('draw')" id="btnDraw" class="px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800 whitespace-nowrap">✏️ Draw</button>
+      <button onclick="resetView()" class="px-2 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300 whitespace-nowrap">🎯 Reset</button>
+      <button onclick="clearGraphics()" class="px-2 py-1 text-xs rounded bg-red-900/40 hover:bg-red-800/60 text-red-300 border border-red-700 whitespace-nowrap">🗑️ Clear</button>
     </div>
 
     <label class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-2 rounded-lg cursor-pointer transition flex items-center gap-1">
@@ -35,7 +35,7 @@
 
   <!-- Main Display Area -->
   <main class="relative flex-1 bg-black flex items-center justify-center overflow-hidden p-0">
-    <canvas id="mapCanvas" class="w-full h-full cursor-grab hidden"></canvas>
+    <canvas id="mapCanvas" class="w-full h-full cursor-grab hidden touch-none"></canvas>
 
     <!-- Context Floating Info Bar (For Measurement Output) -->
     <div id="measureInfo" class="hidden absolute top-4 left-4 bg-slate-900/90 border border-slate-700 text-emerald-400 text-xs font-mono px-3 py-2 rounded-lg shadow-xl z-10">
@@ -75,10 +75,14 @@
     let isDragging = false;
     let dragStart = { x: 0, y: 0 };
 
+    // Mobile Pinch-to-Zoom Tracking
+    let initialPinchDistance = null;
+    let initialScale = 1;
+
     // Interaction Tools
     let activeMode = 'pan'; // 'pan', 'measure', 'draw'
     let measurePoints = [];
-    let drawnShapes = []; // Array of point arrays
+    let drawnShapes = [];
     let currentShape = [];
 
     const canvas = document.getElementById('mapCanvas');
@@ -231,11 +235,13 @@
     function setMode(mode) {
       activeMode = mode;
       document.querySelectorAll('#toolBar button').forEach(b => {
-        b.className = 'px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800';
+        if (b.id.startsWith('btn')) {
+          b.className = 'px-2.5 py-1 text-xs rounded font-semibold text-slate-300 hover:bg-slate-800 whitespace-nowrap';
+        }
       });
 
       const activeBtn = mode === 'pan' ? 'btnPan' : mode === 'measure' ? 'btnMeasure' : 'btnDraw';
-      document.getElementById(activeBtn).className = 'px-2.5 py-1 text-xs rounded font-semibold bg-emerald-600 text-white';
+      document.getElementById(activeBtn).className = 'px-2.5 py-1 text-xs rounded font-semibold bg-emerald-600 text-white whitespace-nowrap';
 
       canvas.style.cursor = mode === 'pan' ? 'grab' : 'crosshair';
 
@@ -260,7 +266,6 @@
       renderMapAndGps();
     }
 
-    // Convert Screen Pixels to Raw Image Pixels
     function screenToImageCoords(screenX, screenY) {
       const rect = canvas.getBoundingClientRect();
       const clickX = screenX - rect.left;
@@ -271,7 +276,6 @@
       };
     }
 
-    // Convert Image Pixels to Lon/Lat
     function imageToGeoCoords(imgX, imgY) {
       if (!mapBbox || !baseImage) return { lon: 0, lat: 0 };
       const [minX, minY, maxX, maxY] = mapBbox;
@@ -280,9 +284,8 @@
       return { lon, lat };
     }
 
-    // Haversine Distance Formula (Meters)
     function calculateHaversine(pt1, pt2) {
-      const R = 6371000; // Earth radius in meters
+      const R = 6371000;
       const dLat = (pt2.lat - pt1.lat) * Math.PI / 180;
       const dLon = (pt2.lon - pt1.lon) * Math.PI / 180;
       const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
@@ -292,7 +295,15 @@
       return R * c;
     }
 
-    // Canvas Mouse & Touch Handlers
+    // Helper for Touch Pinch Calculations
+    function getPinchDistance(e) {
+      return Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+    }
+
+    // --- MOUSE EVENT LISTENERS ---
     canvas.addEventListener('mousedown', (e) => {
       const imgPt = screenToImageCoords(e.clientX, e.clientY);
 
@@ -333,7 +344,6 @@
       }
     });
 
-    // Zooming via Scroll Wheel
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
       const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
@@ -342,13 +352,74 @@
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
 
-      const newScale = scale * zoomFactor;
+      const newScale = Math.max(0.05, Math.min(scale * zoomFactor, 50));
       panX = mouseX - (mouseX - panX) * (newScale / scale);
       panY = mouseY - (mouseY - panY) * (newScale / scale);
       scale = newScale;
 
       renderMapAndGps();
     }, { passive: false });
+
+
+    // --- TOUCH EVENT LISTENERS (ANDROID PINCH & PAN ENGINE) ---
+    canvas.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        // Single finger action
+        const touch = e.touches[0];
+        const imgPt = screenToImageCoords(touch.clientX, touch.clientY);
+
+        if (activeMode === 'pan') {
+          isDragging = true;
+          dragStart = { x: touch.clientX - panX, y: touch.clientY - panY };
+        } else if (activeMode === 'measure') {
+          measurePoints.push(imgPt);
+          updateMeasurement();
+          renderMapAndGps();
+        } else if (activeMode === 'draw') {
+          currentShape.push(imgPt);
+          renderMapAndGps();
+        }
+      } else if (e.touches.length === 2) {
+        // Two fingers: Pinch Zoom
+        isDragging = false;
+        initialPinchDistance = getPinchDistance(e);
+        initialScale = scale;
+      }
+    }, { passive: true });
+
+    canvas.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 1 && isDragging && activeMode === 'pan') {
+        const touch = e.touches[0];
+        panX = touch.clientX - dragStart.x;
+        panY = touch.clientY - dragStart.y;
+        renderMapAndGps();
+      } else if (e.touches.length === 2 && initialPinchDistance) {
+        // Handle Mobile Pinch Zooming
+        const currentDistance = getPinchDistance(e);
+        const rect = canvas.getBoundingClientRect();
+
+        const centerTouchX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+        const centerTouchY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+
+        const zoomFactor = currentDistance / initialPinchDistance;
+        const newScale = Math.max(0.05, Math.min(initialScale * zoomFactor, 50));
+
+        panX = centerTouchX - (centerTouchX - panX) * (newScale / scale);
+        panY = centerTouchY - (centerTouchY - panY) * (newScale / scale);
+        scale = newScale;
+
+        renderMapAndGps();
+      }
+    }, { passive: true });
+
+    canvas.addEventListener('touchend', (e) => {
+      if (e.touches.length < 2) {
+        initialPinchDistance = null;
+      }
+      if (e.touches.length === 0) {
+        isDragging = false;
+      }
+    });
 
     function updateMeasurement() {
       let totalDist = 0;
@@ -369,12 +440,10 @@
     function renderMapAndGps() {
       if (!baseImage || !canvas) return;
 
-      // Clear & fill background
       ctx.fillStyle = '#0f172a';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       ctx.save();
-      // Apply Viewport Pan & Zoom
       ctx.translate(panX, panY);
       ctx.scale(scale, scale);
 
@@ -396,7 +465,6 @@
         ctx.fillStyle = 'rgba(245, 158, 11, 0.2)';
         ctx.fill();
 
-        // Draw Vertices
         shape.forEach(pt => {
           ctx.beginPath();
           ctx.arc(pt.x, pt.y, 4 / scale, 0, 2 * Math.PI);
